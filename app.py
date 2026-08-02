@@ -16,7 +16,12 @@ REAL_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, 
 BASE_URL = 'https://app.pobreflix2.site'
 
 # CACHE ETERNO EM MEMÓRIA
-cache_data = {"m3u": "#EXTM3U\n# API EM INICIALIZAÇÃO... AGUARDE 1 MINUTO E ATUALIZE.", "timestamp": 0, "status": "inicializando"}
+cache_data = {
+    "m3u": "#EXTM3U\n# API EM INICIALIZAÇÃO... AGUARDE 1 MINUTO E ATUALIZE.",
+    "timestamp": 0,
+    "status": "inicializando",
+    "count": 0
+}
 
 # Sessão Turbo
 session_speed = requests.Session()
@@ -28,7 +33,8 @@ session_speed.headers.update({'User-Agent': REAL_UA, 'Connection': 'keep-alive'}
 def home():
     return jsonify({
         "status": cache_data["status"],
-        "message": "API Ycine Master - Versão 40 Eternal Cache",
+        "channels_found": cache_data["count"],
+        "message": "API Ycine Master - Versão 41 Ultra Fast Init",
         "last_update": time.ctime(cache_data["timestamp"]) if cache_data["timestamp"] > 0 else "Em progresso..."
     })
 
@@ -85,20 +91,22 @@ def get_real_categories(server_id):
     return found
 
 def background_update():
-    """Tarefa que roda em segundo plano para manter a lista sempre pronta."""
     global cache_data
     while True:
         try:
-            # Aqui usamos um host genérico ou capturamos o primeiro acesso
-            host = "ycine-master.up.railway.app" # Substitua pelo seu link se quiser fixar
+            host = "ycine-master.up.railway.app" # Host temporário para o cache
             servidores = [{"id": "speed-1", "label": "S1", "max_p": 59}, {"id": "speed-2", "label": "S2", "max_p": 67}, {"id": "speed-3", "label": "S3", "max_p": 44}]
 
             all_results = []
             with ThreadPoolExecutor(max_workers=20) as executor:
                 tasks = []
+                # 1. Carrega CATEGORIAS primeiro
                 for s in servidores:
                     for c in get_real_categories(s['id']):
                         tasks.append(executor.submit(fetch_page, c['url'].split('?')[0]+"?thema=1&server="+s['id']+"&pagina=1", s['label'], s['id'], host, f"{s['label']} - {c['name']}"))
+
+                # 2. Carrega GERAL
+                for s in servidores:
                     for p in range(1, s['max_p'] + 1):
                         tasks.append(executor.submit(fetch_page, f"{BASE_URL}/canais/?thema=1&server={s['id']}&pagina={p}", s['label'], s['id'], host, f"{s['label']} - Geral"))
 
@@ -110,26 +118,23 @@ def background_update():
                 all_results.sort(key=lambda x: (x['category'].replace('Geral', 'ZZZ'), x['nome']))
                 vistos = set()
                 m3u = "#EXTM3U\n"
+                count = 0
                 for c in all_results:
                     if c['chave'] not in vistos:
                         vistos.add(c['chave'])
                         m3u += f'#EXTINF:-1 tvg-logo="{c["logo"]}" group-title="{c["category"]}",{c["nome"]}\n{c["url"]}\n'
+                        count += 1
 
-                cache_data["m3u"] = m3u
-                cache_data["timestamp"] = time.time()
-                cache_data["status"] = "online"
+                cache_data.update({"m3u": m3u, "timestamp": time.time(), "status": "online", "count": count})
         except: pass
-        time.sleep(3600) # Atualiza a cada 1 hora
+        time.sleep(3600)
 
 @app.route('/canais')
 def get_canais():
-    # Detecta o host atual e substitui no cache para garantir que os links funcionem
     current_host = request.host
     m3u_final = cache_data["m3u"].replace("ycine-master.up.railway.app", current_host)
     return Response(m3u_final, mimetype='text/plain')
 
 if __name__ == "__main__":
-    # Inicia a atualização em segundo plano assim que o servidor liga
     threading.Thread(target=background_update, daemon=True).start()
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host='0.0.0.0', port=port)
+    app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 5000)))
