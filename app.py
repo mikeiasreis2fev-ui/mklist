@@ -17,7 +17,7 @@ BASE_URL = 'https://app.pobreflix2.site'
 
 # CACHE ETERNO EM MEMÓRIA
 cache_data = {
-    "m3u": "#EXTM3U\n# API EM INICIALIZAÇÃO... AGUARDE 1 MINUTO E ATUALIZE.",
+    "m3u": "#EXTM3U\n# API EM INICIALIZAÇÃO... AGUARDE 30 SEGUNDOS E ATUALIZE.",
     "timestamp": 0,
     "status": "inicializando",
     "count": 0
@@ -34,7 +34,7 @@ def home():
     return jsonify({
         "status": cache_data["status"],
         "channels_found": cache_data["count"],
-        "message": "API Ycine Master - Versão 41 Ultra Fast Init",
+        "message": "API Ycine Master - Versão 42 Stage Update",
         "last_update": time.ctime(cache_data["timestamp"]) if cache_data["timestamp"] > 0 else "Em progresso..."
     })
 
@@ -90,41 +90,56 @@ def get_real_categories(server_id):
     except: pass
     return found
 
+def generate_m3u(all_results):
+    all_results.sort(key=lambda x: (x['category'].replace('Geral', 'ZZZ'), x['nome']))
+    vistos = set()
+    m3u = "#EXTM3U\n"
+    count = 0
+    for c in all_results:
+        if c['chave'] not in vistos:
+            vistos.add(c['chave'])
+            m3u += f'#EXTINF:-1 tvg-logo="{c["logo"]}" group-title="{c["category"]}",{c["nome"]}\n{c["url"]}\n'
+            count += 1
+    return m3u, count
+
 def background_update():
     global cache_data
     while True:
         try:
-            host = "ycine-master.up.railway.app" # Host temporário para o cache
+            host = "ycine-master.up.railway.app"
             servidores = [{"id": "speed-1", "label": "S1", "max_p": 59}, {"id": "speed-2", "label": "S2", "max_p": 67}, {"id": "speed-3", "label": "S3", "max_p": 44}]
 
-            all_results = []
+            total_results = []
+
             with ThreadPoolExecutor(max_workers=20) as executor:
-                tasks = []
-                # 1. Carrega CATEGORIAS primeiro
+                # ESTÁGIO 1: CATEGORIAS (Rápido)
+                cat_tasks = []
                 for s in servidores:
                     for c in get_real_categories(s['id']):
-                        tasks.append(executor.submit(fetch_page, c['url'].split('?')[0]+"?thema=1&server="+s['id']+"&pagina=1", s['label'], s['id'], host, f"{s['label']} - {c['name']}"))
+                        cat_tasks.append(executor.submit(fetch_page, c['url'].split('?')[0]+"?thema=1&server="+s['id']+"&pagina=1", s['label'], s['id'], host, f"{s['label']} - {c['name']}"))
 
-                # 2. Carrega GERAL
+                for t in cat_tasks:
+                    res = t.result()
+                    if res: total_results.extend(res)
+
+                # Atualiza o cache parcial para o player já funcionar
+                if total_results:
+                    m3u, count = generate_m3u(total_results)
+                    cache_data.update({"m3u": m3u, "timestamp": time.time(), "status": "online (parcial)", "count": count})
+
+                # ESTÁGIO 2: GERAL (Lento, mas completo)
+                geral_tasks = []
                 for s in servidores:
                     for p in range(1, s['max_p'] + 1):
-                        tasks.append(executor.submit(fetch_page, f"{BASE_URL}/canais/?thema=1&server={s['id']}&pagina={p}", s['label'], s['id'], host, f"{s['label']} - Geral"))
+                        geral_tasks.append(executor.submit(fetch_page, f"{BASE_URL}/canais/?thema=1&server={s['id']}&pagina={p}", s['label'], s['id'], host, f"{s['label']} - Geral"))
 
-                for t in tasks:
+                for t in geral_tasks:
                     res = t.result()
-                    if res: all_results.extend(res)
+                    if res: total_results.extend(res)
 
-            if all_results:
-                all_results.sort(key=lambda x: (x['category'].replace('Geral', 'ZZZ'), x['nome']))
-                vistos = set()
-                m3u = "#EXTM3U\n"
-                count = 0
-                for c in all_results:
-                    if c['chave'] not in vistos:
-                        vistos.add(c['chave'])
-                        m3u += f'#EXTINF:-1 tvg-logo="{c["logo"]}" group-title="{c["category"]}",{c["nome"]}\n{c["url"]}\n'
-                        count += 1
-
+            # Atualiza o cache FINAL
+            if total_results:
+                m3u, count = generate_m3u(total_results)
                 cache_data.update({"m3u": m3u, "timestamp": time.time(), "status": "online", "count": count})
         except: pass
         time.sleep(3600)
