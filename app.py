@@ -16,7 +16,7 @@ REAL_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, 
 BASE_URL = 'https://app.pobreflix2.site'
 HOST_PLACEHOLDER = "MINHA_API_HOST_AQUI"
 
-# CACHE DE LISTA (M3U)
+# CACHE DE LISTA (M3U) - Mantém a lista sempre pronta na memória
 cache_data = {
     "m3u": f"#EXTM3U\n# API EM INICIALIZAÇÃO... AGUARDE 30 SEGUNDOS E ATUALIZE.",
     "timestamp": 0,
@@ -24,11 +24,11 @@ cache_data = {
     "count": 0
 }
 
-# CACHE DE REPRODUÇÃO
+# CACHE DE REPRODUÇÃO (Faz o canal abrir instantaneamente se clicado recentemente)
 stream_cache = {}
 STREAM_CACHE_TIMEOUT = 15 # Segundos
 
-# SESSÃO TURBO COM POOL DE CONEXÕES
+# SESSÃO TURBO COM POOL DE CONEXÕES (Máxima velocidade de rede)
 session_speed = requests.Session()
 adapter = HTTPAdapter(pool_connections=100, pool_maxsize=100)
 session_speed.mount("https://", adapter)
@@ -39,7 +39,7 @@ def home():
     return jsonify({
         "status": cache_data["status"],
         "channels_found": cache_data["count"],
-        "message": "API Ycine Master - Versão 46 HBO+ Edition",
+        "message": "API Ycine Master - Versão 45 Ultimate Fusion",
         "last_update": time.ctime(cache_data["timestamp"]) if cache_data["timestamp"] > 0 else "Em progresso..."
     })
 
@@ -48,6 +48,7 @@ def get_stream(server_id, channel_id):
     cache_key = f"{server_id}_{channel_id}"
     now = time.time()
 
+    # Se alguém abriu esse canal nos últimos 15s, entrega o que já está pronto (Instantâneo)
     if cache_key in stream_cache:
         data, ts = stream_cache[cache_key]
         if now - ts < STREAM_CACHE_TIMEOUT:
@@ -57,13 +58,16 @@ def get_stream(server_id, channel_id):
         url_referencia = f"{BASE_URL}/canais/{channel_id}?thema=1&server={server_id}"
         target_m3u8 = f"https://speed.megafilmeshd9.com/midia/{server_id}/{channel_id}.m3u8"
 
+        # Usa o Pool de conexões para baixar o arquivo mais rápido
         r = session_speed.get(target_m3u8, headers={'Referer': url_referencia, 'Origin': BASE_URL}, timeout=6)
         if r.status_code != 200: return f"Erro: {r.status_code}", 404
 
         video_base_url = target_m3u8.rsplit('/', 1)[0] + "/"
+        # Reescrita ultra-rápida de links internos da playlist
         new_playlist = [(video_base_url + line if (line and not line.startswith(('#', 'http'))) else line) for line in r.text.splitlines()]
         final_content = '\n'.join(new_playlist)
 
+        # Salva no cache de reprodução para o próximo acesso ser imediato
         stream_cache[cache_key] = (final_content, now)
 
         response = Response(final_content, mimetype='application/x-mpegURL')
@@ -88,12 +92,8 @@ def fetch_page(url, serv_label, serv_id, category_name):
             link = f"https://{HOST_PLACEHOLDER}/stream/{serv_id}/{canal_id}.m3u8"
 
             cat = category_name
-            nome_up = nome.upper()
-            if any(k in nome_up for k in infantil):
-                cat = f"{serv_label} - Infantil"
-            # LÓGICA HBO+ (Apenas HBO ou MAX, excluindo variantes não desejadas)
-            elif ("HBO" in nome_up or "MAX" in nome_up) and not any(ex in nome_up for ex in ["TV MAX", "XY MAX"]):
-                cat = f"{serv_label} - HBO+"
+            if any(k in nome.upper() for k in infantil): cat = f"{serv_label} - Infantil"
+            elif "HBO" in nome.upper() or "MAX " in nome.upper(): cat = f"{serv_label} - HBO Max"
 
             canais.append({"nome": nome, "url": link, "logo": (a.find('img').get('src') or ""), "category": cat, "chave": f"{serv_id}-{canal_id}"})
     except: pass
@@ -124,6 +124,7 @@ def generate_m3u(all_results):
     return m3u, count
 
 def background_update():
+    """Robô que atualiza a lista em segundo plano para rapidez total"""
     global cache_data
     print("[LOG] Robô de canais iniciado...")
     while True:
@@ -132,7 +133,7 @@ def background_update():
             total_results = []
 
             with ThreadPoolExecutor(max_workers=20) as executor:
-                # ETAPA 1: Categorias
+                # ETAPA 1: Categorias (Rápido, já libera Infantil e HBO)
                 cat_tasks = []
                 for s in servidores:
                     for c in get_real_categories(s['id']):
@@ -146,7 +147,7 @@ def background_update():
                     m3u, count = generate_m3u(total_results)
                     cache_data.update({"m3u": m3u, "timestamp": time.time(), "status": "online (parcial)", "count": count})
 
-                # ETAPA 2: Geral
+                # ETAPA 2: Geral (Completo)
                 geral_tasks = []
                 for s in servidores:
                     for p in range(1, s['max_p'] + 1):
@@ -161,14 +162,15 @@ def background_update():
                 cache_data.update({"m3u": m3u, "timestamp": time.time(), "status": "online", "count": count})
         except Exception as e:
             print(f"[ERROR] Falha no robô: {e}")
-        time.sleep(3600)
+        time.sleep(3600) # Atualiza a cada 1 hora
 
-# INICIALIZAÇÃO AUTOMÁTICA
+# INICIALIZAÇÃO AUTOMÁTICA DO ROBÔ EM SEGUNDO PLANO
 threading.Thread(target=background_update, daemon=True).start()
 
 @app.route('/canais')
 def get_canais():
     current_host = request.host
+    # Substituição dinâmica para garantir que os links apontem sempre para este servidor
     m3u_final = cache_data["m3u"].replace(HOST_PLACEHOLDER, current_host)
     return Response(m3u_final, mimetype='text/plain')
 
