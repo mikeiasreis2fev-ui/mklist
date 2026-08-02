@@ -14,10 +14,11 @@ app = Flask(__name__)
 # Configurações de Identidade Real
 REAL_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
 BASE_URL = 'https://app.pobreflix2.site'
+HOST_PLACEHOLDER = "MINHA_API_HOST_AQUI"
 
 # CACHE ETERNO EM MEMÓRIA
 cache_data = {
-    "m3u": "#EXTM3U\n# API EM INICIALIZAÇÃO... AGUARDE 30 SEGUNDOS E ATUALIZE.",
+    "m3u": f"#EXTM3U\n# API EM INICIALIZAÇÃO... AGUARDE 30 SEGUNDOS E ATUALIZE.",
     "timestamp": 0,
     "status": "inicializando",
     "count": 0
@@ -34,7 +35,7 @@ def home():
     return jsonify({
         "status": cache_data["status"],
         "channels_found": cache_data["count"],
-        "message": "API Ycine Master - Versão 42 Stage Update",
+        "message": "API Ycine Master - Versão 43 Final Shield",
         "last_update": time.ctime(cache_data["timestamp"]) if cache_data["timestamp"] > 0 else "Em progresso..."
     })
 
@@ -55,7 +56,7 @@ def get_stream(server_id, channel_id):
     except Exception as e:
         return str(e), 500
 
-def fetch_page(url, serv_label, serv_id, host, category_name):
+def fetch_page(url, serv_label, serv_id, category_name):
     canais = []
     try:
         r = session_speed.get(url, timeout=15)
@@ -68,7 +69,7 @@ def fetch_page(url, serv_label, serv_id, host, category_name):
             nome = h4.get_text(strip=True) if h4 else ""
             if not nome or any(m in nome.lower() for m in ['sair', 'minha conta']): continue
             canal_id = a['href'].split('?')[0].rstrip('/').split('/')[-1]
-            link = f"https://{host}/stream/{serv_id}/{canal_id}.m3u8"
+            link = f"https://{HOST_PLACEHOLDER}/stream/{serv_id}/{canal_id}.m3u8"
 
             cat = category_name
             if any(k in nome.upper() for k in infantil): cat = f"{serv_label} - Infantil"
@@ -106,38 +107,34 @@ def background_update():
     global cache_data
     while True:
         try:
-            host = "ycine-master.up.railway.app"
             servidores = [{"id": "speed-1", "label": "S1", "max_p": 59}, {"id": "speed-2", "label": "S2", "max_p": 67}, {"id": "speed-3", "label": "S3", "max_p": 44}]
-
             total_results = []
 
             with ThreadPoolExecutor(max_workers=20) as executor:
-                # ESTÁGIO 1: CATEGORIAS (Rápido)
+                # ETAPA 1: Categorias (Mais rápido)
                 cat_tasks = []
                 for s in servidores:
                     for c in get_real_categories(s['id']):
-                        cat_tasks.append(executor.submit(fetch_page, c['url'].split('?')[0]+"?thema=1&server="+s['id']+"&pagina=1", s['label'], s['id'], host, f"{s['label']} - {c['name']}"))
+                        cat_tasks.append(executor.submit(fetch_page, c['url'].split('?')[0]+"?thema=1&server="+s['id']+"&pagina=1", s['label'], s['id'], f"{s['label']} - {c['name']}"))
 
                 for t in cat_tasks:
                     res = t.result()
                     if res: total_results.extend(res)
 
-                # Atualiza o cache parcial para o player já funcionar
                 if total_results:
                     m3u, count = generate_m3u(total_results)
                     cache_data.update({"m3u": m3u, "timestamp": time.time(), "status": "online (parcial)", "count": count})
 
-                # ESTÁGIO 2: GERAL (Lento, mas completo)
+                # ETAPA 2: Geral (Lista completa)
                 geral_tasks = []
                 for s in servidores:
                     for p in range(1, s['max_p'] + 1):
-                        geral_tasks.append(executor.submit(fetch_page, f"{BASE_URL}/canais/?thema=1&server={s['id']}&pagina={p}", s['label'], s['id'], host, f"{s['label']} - Geral"))
+                        geral_tasks.append(executor.submit(fetch_page, f"{BASE_URL}/canais/?thema=1&server={s['id']}&pagina={p}", s['label'], s['id'], f"{s['label']} - Geral"))
 
                 for t in geral_tasks:
                     res = t.result()
                     if res: total_results.extend(res)
 
-            # Atualiza o cache FINAL
             if total_results:
                 m3u, count = generate_m3u(total_results)
                 cache_data.update({"m3u": m3u, "timestamp": time.time(), "status": "online", "count": count})
@@ -146,8 +143,9 @@ def background_update():
 
 @app.route('/canais')
 def get_canais():
+    # Detecta o host atual de forma dinâmica
     current_host = request.host
-    m3u_final = cache_data["m3u"].replace("ycine-master.up.railway.app", current_host)
+    m3u_final = cache_data["m3u"].replace(HOST_PLACEHOLDER, current_host)
     return Response(m3u_final, mimetype='text/plain')
 
 if __name__ == "__main__":
